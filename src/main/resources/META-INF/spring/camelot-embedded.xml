@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:amq="http://activemq.apache.org/schema/core"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+            http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+            http://camel.apache.org/schema/spring
+            http://camel.apache.org/schema/spring/camel-spring.xsd
+            http://www.springframework.org/schema/context
+            http://www.springframework.org/schema/context/spring-context-3.0.xsd
+            http://activemq.apache.org/schema/core
+            http://activemq.apache.org/schema/core/activemq-core.xsd">
+
+    <context:annotation-config/>
+    <context:component-scan base-package="ru.yandex.qatools.camelot.example"/>
+
+    <!-- Embedded ActiveMQ -->
+    <amq:broker useJmx="false" persistent="false">
+        <amq:transportConnectors>
+            <amq:transportConnector uri="tcp://localhost:61619"/>
+        </amq:transportConnectors>
+    </amq:broker>
+    <amq:connectionFactory id="jmsFactory" brokerURL="vm://localhost:61619"/>
+    <bean id="jmsConnectionFactory" class="org.apache.activemq.ActiveMQConnectionFactory">
+        <property name="brokerURL" value="failover:(tcp://localhost:61619)?randomize=false"/>
+    </bean>
+    <bean id="pooledConnectionFactory" class="org.apache.activemq.pool.PooledConnectionFactory"
+          depends-on="testContext" init-method="start" destroy-method="stop">
+        <property name="timeBetweenExpirationCheckMillis" value="0"/>
+        <property name="idleTimeout" value="0"/>
+        <property name="maxConnections" value="8"/>
+        <property name="maximumActiveSessionPerConnection" value="500"/>
+        <property name="connectionFactory" ref="jmsConnectionFactory"/>
+    </bean>
+    <bean id="jmsConfig" class="org.apache.camel.component.jms.JmsConfiguration">
+        <property name="connectionFactory" ref="pooledConnectionFactory"/>
+        <property name="transacted" value="false"/>
+        <property name="testConnectionOnStartup" value="true"/>
+    </bean>
+    <bean id="activemq" class="org.apache.activemq.camel.component.ActiveMQComponent">
+        <property name="configuration" ref="jmsConfig"/>
+        <property name="testConnectionOnStartup" value="true"/>
+    </bean>
+
+    <!-- Embedded Camelot -->
+    <bean id="camelotMulticastProfile" class="org.apache.camel.spi.ThreadPoolProfile">
+        <property name="id" value="camelotMulticastProfile"/>
+        <property name="timeUnit" value="MILLISECONDS"/>
+        <property name="keepAliveTime" value="30000"/>
+        <property name="poolSize" value="1"/>
+        <property name="maxPoolSize" value="5"/>
+    </bean>
+    <bean id="schedulerFactory" class="org.quartz.impl.StdSchedulerFactory"/>
+    <bean id="engine" class="ru.yandex.qatools.camelot.core.impl.ProcessingEngineImpl" init-method="init">
+        <constructor-arg name="configResources" value="classpath*:/camelot.xml"/>
+        <constructor-arg name="camelContext" ref="testContext"/>
+        <constructor-arg name="pluginLoader">
+            <bean class="ru.yandex.qatools.camelot.core.impl.SameClasspathPluginLoader"/>
+        </constructor-arg>
+        <constructor-arg name="inputUri" value="ref:events.input"/>
+        <constructor-arg name="outputUri" value="direct:plugin.stop"/>
+        <property name="scheduler">
+            <bean factory-bean="schedulerFactory" factory-method="getScheduler"/>
+        </property>
+        <property name="contextInjector">
+            <bean class="ru.yandex.qatools.camelot.core.impl.SpringContextInjector"/>
+        </property>
+        <property name="appConfig">
+            <bean class="ru.yandex.qatools.camelot.core.impl.AppConfigSpringProperties"/>
+        </property>
+        <property name="buildersFactory">
+            <bean class="ru.yandex.qatools.camelot.core.builders.BuildersFactoryImpl"/>
+        </property>
+        <property name="pluginInitializer">
+            <bean class="ru.yandex.qatools.camelot.core.impl.PluginInitializerImpl"/>
+        </property>
+    </bean>
+
+    <!-- Camel context -->
+    <camelContext id="testContext" xmlns="http://camel.apache.org/schema/spring">
+        <jmxAgent id="agent" disabled="true"/>
+        <threadPoolProfile id="camelotDefaultProfile" defaultProfile="true" maxPoolSize="64"/>
+        <endpoint id="events.input" uri="activemq:queue:events.input"/>
+
+        <route id="stopped">
+            <from uri="direct:plugin.stop"/>
+            <stop/>
+        </route>
+    </camelContext>
+</beans>
